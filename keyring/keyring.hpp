@@ -18,10 +18,11 @@
 */
 #pragma once
 
-#include "keyring.h"
+#include <map>
+
 #include "keys/encryptor.h"
 
-#include <map>
+#include "keyring.h"
 
 namespace ton {
 
@@ -33,6 +34,7 @@ class KeyringImpl : public Keyring {
     td::actor::ActorOwn<DecryptorAsync> decryptor_sign;
     td::actor::ActorOwn<DecryptorAsync> decryptor_decrypt;
     PublicKey public_key;
+    PrivateKey private_key;
     bool is_temp;
     PrivateKeyDescr(PrivateKey private_key, bool is_temp);
   };
@@ -47,6 +49,7 @@ class KeyringImpl : public Keyring {
   void add_key_short(PublicKeyHash key_hash, td::Promise<PublicKey> promise) override;
   void del_key(PublicKeyHash key_hash, td::Promise<td::Unit> promise) override;
 
+  void export_private_key(PublicKeyHash key_hash, td::Promise<PrivateKey> promise) override;
   void get_public_key(PublicKeyHash key_hash, td::Promise<PublicKey> promise) override;
   void sign_message(PublicKeyHash key_hash, td::BufferSlice data, td::Promise<td::BufferSlice> promise) override;
   void sign_add_get_public_key(PublicKeyHash key_hash, td::BufferSlice data,
@@ -55,6 +58,8 @@ class KeyringImpl : public Keyring {
                      td::Promise<std::vector<td::Result<td::BufferSlice>>> promise) override;
 
   void decrypt_message(PublicKeyHash key_hash, td::BufferSlice data, td::Promise<td::BufferSlice> promise) override;
+
+  void export_all_private_keys(td::Promise<std::vector<PrivateKey>> promise) override;
 
   KeyringImpl(std::string db_root) : db_root_(db_root) {
   }
@@ -70,4 +75,3 @@ class KeyringImpl : public Keyring {
 }  // namespace keyring
 
 }  // namespace ton
-

@@ -35,14 +35,15 @@
  * CHECK(condition) <===> LOG_IF(FATAL, !(condition))
  */
 
-#include "td/utils/common.h"
-#include "td/utils/port/thread_local.h"
+#include <atomic>
+#include <type_traits>
+
 #include "td/utils/Slice.h"
 #include "td/utils/StackAllocator.h"
 #include "td/utils/StringBuilder.h"
-
-#include <atomic>
-#include <type_traits>
+#include "td/utils/common.h"
+#include "td/utils/port/Clocks.h"
+#include "td/utils/port/thread_local.h"
 
 #define PSTR_IMPL() ::td::Logger(::td::NullLog().ref(), ::td::LogOptions::plain(), 0)
 #define PSLICE() ::td::detail::Slicify() & PSTR_IMPL()
@@ -73,6 +74,7 @@
 
 #define LOG(level) LOG_IMPL(level, level, true, ::td::Slice())
 #define LOG_IF(level, condition) LOG_IMPL(level, level, condition, #condition)
+#define FLOG(level) LOG_IMPL(level, level, true, ::td::Slice()) << td::LambdaPrint{} << [&](auto &sb)
 
 #define VLOG(level) LOG_IMPL(DEBUG, level, true, TD_DEFINE_STR(level))
 #define VLOG_IF(level, condition) LOG_IMPL(DEBUG, level, condition, TD_DEFINE_STR(level) " " #condition)
@@ -94,13 +96,13 @@ inline bool no_return_func() {
 #define DUMMY_LOG_CHECK(condition) LOG_IF(NEVER, !(condition))
 
 #ifdef TD_DEBUG
-  #if TD_MSVC
+#if TD_MSVC
     #define LOG_CHECK(condition)        \
       __analysis_assume(!!(condition)); \
       LOG_IMPL(FATAL, FATAL, !(condition), #condition)
-  #else
+#else
     #define LOG_CHECK(condition) LOG_IMPL(FATAL, FATAL, !(condition) && no_return_func(), #condition)
-  #endif
+#endif
 #else
   #define LOG_CHECK DUMMY_LOG_CHECK
 #endif
@@ -197,6 +199,9 @@ class LogInterface {
   virtual vector<string> get_file_paths() {
     return {};
   }
+  virtual AnsiColor color_for(int log_level) {
+    return AnsiColor::Disallowed;
+  }
 };
 
 class NullLog : public LogInterface {
@@ -218,13 +223,6 @@ void set_log_fatal_error_callback(OnFatalErrorCallback callback);
 
 [[noreturn]] void process_fatal_error(CSlice message);
 
-#define TC_RED "\x1b[1;31m"
-#define TC_BLUE "\x1b[1;34m"
-#define TC_CYAN "\x1b[1;36m"
-#define TC_GREEN "\x1b[1;32m"
-#define TC_YELLOW "\x1b[1;33m"
-#define TC_EMPTY "\x1b[0m"
-
 class TsCerr {
  public:
   TsCerr();
@@ -237,7 +235,7 @@ class TsCerr {
 
  private:
   using Lock = std::atomic_flag;
-  static Lock lock_;
+  inline static Lock lock_;
 
   void enterCritical();
   void exitCritical();
@@ -246,20 +244,16 @@ class TsCerr {
 class Logger {
  public:
   static const int BUFFER_SIZE = 128 * 1024;
-  Logger(LogInterface &log, const LogOptions &options, int log_level)
-      : buffer_(StackAllocator::alloc(BUFFER_SIZE))
-      , log_(log)
-      , sb_(buffer_.as_slice())
-      , options_(options)
-      , log_level_(log_level) {
-  }
-
+  Logger(LogInterface &log, const LogOptions &options, int log_level);
   Logger(LogInterface &log, const LogOptions &options, int log_level, Slice file_name, int line_num, Slice comment);
 
-  template <class T>
+  template <Formattable T>
   Logger &operator<<(const T &other) {
     sb_ << other;
     return *this;
+  }
+  LambdaPrintHelper<td::StringBuilder> operator<<(const LambdaPrint &) {
+    return LambdaPrintHelper<td::StringBuilder>{sb_};
   }
 
   MutableCSlice as_cslice() {
@@ -283,6 +277,7 @@ class Logger {
   StringBuilder sb_;
   const LogOptions &options_;
   int log_level_;
+  td::uint64 start_at_;
 };
 
 namespace detail {
@@ -336,7 +331,8 @@ class TsLog : public LogInterface {
 
  private:
   LogInterface *log_ = nullptr;
-  std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+  std::atomic_flag lock_;
+
   void enter_critical() {
     while (lock_.test_and_set(std::memory_order_acquire)) {
       // spin
@@ -346,5 +342,4 @@ class TsLog : public LogInterface {
     lock_.clear(std::memory_order_release);
   }
 };
-
 }  // namespace td
